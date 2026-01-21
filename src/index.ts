@@ -1,64 +1,74 @@
 #!/usr/bin/env node
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { 
+  ListToolsRequestSchema, 
+  CallToolRequestSchema 
+} from "@modelcontextprotocol/sdk/types.js";
 import express from "express";
-import { SequentialThinkingSchema, SEQUENTIAL_THINKING_TOOL } from './schema.js';
-import { ThoughtData, Tool } from './types.js';
+import { SEQUENTIAL_THINKING_TOOL } from './schema.js';
 
-// --- 逻辑实现类 (保持原样) ---
-class ToolAwareSequentialThinkingServer {
-    private thought_history: ThoughtData[] = [];
-    private maxHistorySize: number = 1000;
-
-    public async processThought(input: any) {
-        const validatedInput = input as ThoughtData;
-        this.thought_history.push(validatedInput);
-        if (this.thought_history.length > this.maxHistorySize) {
-            this.thought_history = this.thought_history.slice(-this.maxHistorySize);
-        }
-        
-        console.error(`Thought #${validatedInput.thought_number} processed`);
-        
+// --- 简单的思维逻辑类 ---
+class SequentialThinkingServer {
+    private thought_history: any[] = [];
+    
+    public async processThought(args: any) {
+        console.error(`Processing thought: ${args.thought_number}`);
         return {
             content: [{
-                type: 'text' as const,
+                type: 'text',
                 text: JSON.stringify({
-                    thought_number: validatedInput.thought_number,
-                    total_thoughts: validatedInput.total_thoughts,
-                    next_thought_needed: validatedInput.next_thought_needed,
-                    history_length: this.thought_history.length
-                }, null, 2),
-            }],
+                    status: "success",
+                    thought_number: args.thought_number,
+                    total_thoughts: args.total_thoughts
+                }, null, 2)
+            }]
         };
     }
 }
 
-const thinkingLogic = new ToolAwareSequentialThinkingServer();
+const thinkingLogic = new SequentialThinkingServer();
 
-// --- 创建标准 MCP Server ---
+// --- 初始化标准 MCP Server ---
 const server = new Server(
-    { name: "sequential-thinking-server", version: "1.0.0" },
+    { name: "sequential-thinking", version: "0.0.4" },
     { capabilities: { tools: {} } }
 );
 
-// 注册工具
-server.setRequestHandler(any, async (request) => {
+// 1. 注册工具列表句柄 (修复了 any 报错)
+server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: [{
+        name: "sequentialthinking_tools",
+        description: SEQUENTIAL_THINKING_TOOL.description,
+        inputSchema: {
+            type: "object",
+            properties: {
+                thought: { type: "string" },
+                thought_number: { type: "integer" },
+                total_thoughts: { type: "integer" },
+                next_thought_needed: { type: "boolean" }
+            },
+            required: ["thought", "thought_number", "total_thoughts", "next_thought_needed"]
+        }
+    }]
+}));
+
+// 2. 注册工具调用句柄 (修复了 any 报错)
+server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (request.params.name === "sequentialthinking_tools") {
-        return thinkingLogic.processThought(request.params.arguments);
+        return await thinkingLogic.processThought(request.params.arguments);
     }
     throw new Error("Tool not found");
 });
 
-// --- Express SSE 服务设置 ---
+// --- Express & SSE 适配 ---
 const app = express();
 let transport: SSEServerTransport | null = null;
 
-app.get("/", (req, res) => {
-    res.send("Standard MCP Server is running!");
-});
+app.get("/", (req, res) => res.send("Standard MCP Server is Running"));
 
 app.get("/sse", async (req, res) => {
-    console.log("Kelivo connected via SSE");
+    console.log("New Kelivo connection established");
     transport = new SSEServerTransport("/messages", res);
     await server.connect(transport);
 });
@@ -71,7 +81,8 @@ app.post("/messages", express.json(), async (req, res) => {
     }
 });
 
-const PORT = process.env.PORT || 10000;
+// 3. 修复端口类型报错
+const PORT = Number(process.env.PORT) || 10000;
 app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server is ready on port ${PORT}`);
+    console.log(`Server ready for Kelivo on port ${PORT}`);
 });

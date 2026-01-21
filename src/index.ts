@@ -1,10 +1,7 @@
 #!/usr/bin/env node
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
-import { 
-  ListToolsRequestSchema, 
-  CallToolRequestSchema 
-} from "@modelcontextprotocol/sdk/types.js";
+import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import express from "express";
 import { SEQUENTIAL_THINKING_TOOL } from './schema.js';
 
@@ -13,7 +10,7 @@ const server = new Server(
     { capabilities: { tools: {} } }
 );
 
-// 工具注册逻辑
+// 核心逻辑
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [{
         name: "sequentialthinking_tools",
@@ -33,55 +30,69 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (request.params.name === "sequentialthinking_tools") {
-        return { content: [{ type: 'text', text: "Logic Processed" }] };
+        return { content: [{ type: 'text', text: "Tool logic running..." }] };
     }
     throw new Error("Tool not found");
 });
 
 const app = express();
-
-// 1. 提前声明全局解析器，确保所有 POST 请求都能被解析
 app.use(express.json());
 
-let transport: SSEServerTransport | null = null;
+// 关键改动：使用一个极简的全局变量存储当前的 transport
+let currentTransport: SSEServerTransport | null = null;
 
 app.get("/sse", async (req, res) => {
-    // 1. 强制禁用所有可能的缓存
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-transform, no-cache, must-revalidate');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('Expires', '0');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no'); // 关键：禁用 Nginx/Render 缓冲
+    console.log(">>> SSE: New connection request from Kelivo");
+    
+    // 1. 设置极度显式的 Header
+    res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-transform',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no'
+    });
 
-    const protocol = req.headers['x-forwarded-proto'] || 'http';
-    const host = req.get('host');
-    const messageUrl = `${protocol}://${host}/messages`;
+    // 2. 这里的路径必须是绝对路径或简单的相对路径
+    // 我们强制使用 "/messages" 并在下方 POST 中匹配
+    currentTransport = new SSEServerTransport("/messages", res);
     
-    console.log(`Kelivo connected. Callback: ${messageUrl}`);
+    // 3. 立即连接
+    await server.connect(currentTransport);
+    console.log(">>> SSE: Server connected to transport");
 
-    transport = new SSEServerTransport(messageUrl as `/${string}`, res);
-    
-    // 2. 这里的 connect 会发送握手消息，我们需要确保它立即发出
-    await server.connect(transport);
-    
-    // 3. 某些环境下需要手动发送一个空行或注释来激活流
-    res.write(':ok\n\n'); 
+    // 4. 保持连接存活的心跳，防止 Render 断开
+    const keepAlive = setInterval(() => {
+        res.write(': keep-alive\n\n');
+    }, 20000);
+
+    req.on("close", () => {
+        clearInterval(keepAlive);
+        currentTransport = null;
+        console.log(">>> SSE: Connection closed");
+    });
 });
 
 app.post("/messages", async (req, res) => {
-    console.log("POST /messages received. Body keys:", Object.keys(req.body));
-    if (transport) {
-        await transport.handlePostMessage(req, res);
+    console.log(">>> POST: Received message from Kelivo");
+    
+    if (currentTransport) {
+        try {
+            // 这里是报错的地方，我们增加一个状态检查
+            await currentTransport.handlePostMessage(req, res);
+            console.log(">>> POST: Message handled successfully");
+        } catch (err) {
+            console.error(">>> POST: SDK failed to handle message:", err);
+            res.status(500).send(String(err));
+        }
     } else {
-        // 容错：如果 transport 因为并发丢失，重新尝试基于当前响应建立（虽然不推荐但增加成功率）
+        console.error(">>> POST: No active transport session found");
         res.status(400).send("No active session");
     }
 });
 
-app.get("/", (req, res) => res.send("Server is alive"));
+app.get("/", (req, res) => res.send("MCP Server is Running"));
 
 const PORT = Number(process.env.PORT) || 10000;
 app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on port ${PORT}`);
+    console.log(`Server listening on port ${PORT}`);
 });

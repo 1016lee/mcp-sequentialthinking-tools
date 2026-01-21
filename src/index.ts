@@ -5,6 +5,8 @@
 
 import { McpServer } from 'tmcp';
 import { ValibotJsonSchemaAdapter } from '@tmcp/adapter-valibot';
+import express from "express";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StdioTransport } from '@tmcp/transport-stdio';
 import * as v from 'valibot';
 import chalk from 'chalk';
@@ -280,10 +282,34 @@ server.tool(
 	},
 );
 
-async function main() {
-	const transport = new StdioTransport(server);
-	transport.listen();
-	console.error('Sequential Thinking MCP Server running on stdio');
+async function main() {  
+	const server = new SequentialThinkingServer();
+
+// 创建 Express 应用
+const app = express();
+let transport: SSEServerTransport | null = null;
+
+// 1. 创建 SSE 链接端点
+app.get("/sse", async (req, res) => {
+  console.log("New SSE connection established");
+  transport = new SSEServerTransport("/messages", res);
+  await server.server.connect(transport);
+});
+
+// 2. 处理消息传输端点
+app.post("/messages", async (req, res) => {
+  if (transport) {
+    await transport.handlePostMessage(req, res);
+  } else {
+    res.status(400).send("No active SSE transport");
+  }
+});
+
+// 3. 监听 Render 提供的端口
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => {
+  console.log(`Sequential Thinking MCP server running on port ${PORT}`);
+});
 }
 
 main().catch((error) => {

@@ -283,20 +283,23 @@ server.tool(
 );
 
 async function main() {
-  const server = new SequentialThinkingServer();
+  // 注意：原始代码中已经创建了一个名为 'server' 的实例
+  // 我们直接使用它，不要尝试 new 一个不存在的类
+  
   const app = express();
   let transport: SSEServerTransport | null = null;
 
-  // 1. 根路径：用于 Render 健康检查和快速测试
+  // 1. 根路径：用于 Render 健康检查
   app.get("/", (req, res) => {
-    res.send("MCP Server is running!");
+    res.send("Sequential Thinking MCP Server is running!");
   });
 
   // 2. SSE 链接端点
   app.get("/sse", async (req, res) => {
     console.log("New SSE connection established");
+    // 这里的 server 是原始代码顶层定义的那个 server 变量
     transport = new SSEServerTransport("/messages", res);
-    await server.server.connect(transport);
+    await server.connect(transport); 
   });
 
   // 3. 消息传输端点
@@ -308,10 +311,11 @@ async function main() {
     }
   });
 
-  // 4. 最后启动监听
-  const PORT = process.env.PORT || 10000;
+  // 4. 监听端口 (修复了类型转换错误)
+  const PORT = Number(process.env.PORT) || 10000;
+  
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Sequential Thinking MCP server running on port ${PORT}`);
+    console.log(`MCP server running on port ${PORT}`);
   });
 }
 

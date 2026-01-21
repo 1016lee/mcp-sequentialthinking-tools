@@ -8,21 +8,15 @@ import {
 import express from "express";
 import { SEQUENTIAL_THINKING_TOOL } from './schema.js';
 
-// --- 核心逻辑类 ---
 class SequentialThinkingServer {
-    private thought_history: any[] = [];
-    
     public async processThought(args: any) {
-        // 打印到控制台方便在 Render 日志查看进度
-        console.error(`[Thinking] Step: ${args.thought_number}/${args.total_thoughts}`);
-        
+        console.error(`[Thinking] Step: ${args.thought_number}`);
         return {
             content: [{
                 type: 'text',
                 text: JSON.stringify({
                     thought_number: args.thought_number,
                     total_thoughts: args.total_thoughts,
-                    next_thought_needed: args.next_thought_needed,
                     status: "processed"
                 }, null, 2)
             }]
@@ -31,21 +25,11 @@ class SequentialThinkingServer {
 }
 
 const thinkingLogic = new SequentialThinkingServer();
-
-// --- 初始化标准 MCP Server ---
 const server = new Server(
-    { 
-        name: "sequential-thinking-server", 
-        version: "0.0.4" 
-    },
-    { 
-        capabilities: { 
-            tools: {} 
-        } 
-    }
+    { name: "sequential-thinking-server", version: "0.0.4" },
+    { capabilities: { tools: {} } }
 );
 
-// 1. 注册工具列表
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [{
         name: "sequentialthinking_tools",
@@ -53,21 +37,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         inputSchema: {
             type: "object",
             properties: {
-                thought: { type: "string", description: "Your current thinking process" },
-                thought_number: { type: "integer", description: "Current step number" },
-                total_thoughts: { type: "integer", description: "Estimated total steps" },
-                next_thought_needed: { type: "boolean", description: "Whether another step is required" },
-                is_revision: { type: "boolean" },
-                revises_thought: { type: "integer" },
-                branch_from_thought: { type: "integer" },
-                branch_id: { type: "string" }
+                thought: { type: "string" },
+                thought_number: { type: "integer" },
+                total_thoughts: { type: "integer" },
+                next_thought_needed: { type: "boolean" }
             },
             required: ["thought", "thought_number", "total_thoughts", "next_thought_needed"]
         }
     }]
 }));
 
-// 2. 注册工具执行
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (request.params.name === "sequentialthinking_tools") {
         return await thinkingLogic.processThought(request.params.arguments);
@@ -75,47 +54,53 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     throw new Error(`Tool not found: ${request.params.name}`);
 });
 
-// --- Express SSE 服务设置 ---
 const app = express();
-// 必须：全局存储 transport 实例以供 POST 路由使用
-let transport: SSEServerTransport | null = null;
 
-app.get("/", (req, res) => {
-    res.send("Sequential Thinking MCP Server is Live!");
+// 存储所有活跃的 transport 会话
+const activeTransports = new Map<string, SSEServerTransport>();
+
+app.get("/", (req, res) => res.send("MCP Server is Live!"));
+
+app.get("/sse", async (req, res) => {
+    console.log("New SSE Connection");
+    const transport = new SSEServerTransport("/messages", res);
+    
+    // 使用 SDK 内部生成的 sessionId 或自定义一个来追踪
+    // 这里我们简单处理，确保在连接建立后将其存入 Map
+    await server.connect(transport);
+
+    // 关键修复：监听 transport 的 sessionId
+    const sessionId = (transport as any).sessionId;
+    if (sessionId) {
+        activeTransports.set(sessionId, transport);
+        console.log(`Transport registered: ${sessionId}`);
+    }
+
+    req.on('close', () => {
+        if (sessionId) activeTransports.delete(sessionId);
+        console.log("Connection closed");
+    });
 });
 
-// SSE 握手端点
-app.get("/sse", async (req, res) => {
-    console.log("Kelivo: New SSE connection attempt");
+app.post("/messages", express.json(), async (req, res) => {
+    // 获取会话 ID，SDK 默认通过查询参数 sessionId 传递
+    const sessionId = req.query.sessionId as string;
+    const transport = activeTransports.get(sessionId);
 
-    // 注意：已移除 res.writeHead，完全交给 SSEServerTransport 处理以避免 ERR_HTTP_HEADERS_SENT
-    transport = new SSEServerTransport("/messages", res);
-    
-    try {
-        await server.connect(transport);
-        console.log("Kelivo: SSE connected and MCP initialized");
-    } catch (err) {
-        console.error("MCP Connection Error:", err);
-        // 如果 SDK 还没发过 Header，则尝试返回错误
-        if (!res.headersSent) {
-            res.status(500).send("Internal Server Error");
+    if (transport) {
+        await transport.handlePostMessage(req, res);
+    } else {
+        // 如果没有 sessionId，尝试使用最近的一个（兼容某些客户端）
+        const fallbackTransport = Array.from(activeTransports.values()).pop();
+        if (fallbackTransport) {
+            await fallbackTransport.handlePostMessage(req, res);
+        } else {
+            res.status(400).send("No active session");
         }
     }
 });
 
-// 消息回传端点
-app.post("/messages", express.json(), async (req, res) => {
-    if (transport) {
-        console.log("Kelivo: Received POST message");
-        await transport.handlePostMessage(req, res);
-    } else {
-        console.error("Kelivo: POST received but no active transport");
-        res.status(400).send("No active SSE session");
-    }
-});
-
-// 监听端口 (使用 Number 转换确保类型正确)
 const PORT = Number(process.env.PORT) || 10000;
 app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server is running on port ${PORT}`);
+    console.log(`Server ready on port ${PORT}`);
 });

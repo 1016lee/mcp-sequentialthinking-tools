@@ -10,7 +10,7 @@ const server = new Server(
     { capabilities: { tools: {} } }
 );
 
-// 工具注册
+// 注册工具逻辑
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [{
         name: "sequentialthinking_tools",
@@ -30,58 +30,43 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (request.params.name === "sequentialthinking_tools") {
-        return { content: [{ type: 'text', text: "Processing completed" }] };
+        return { content: [{ type: 'text', text: "Success" }] };
     }
     throw new Error("Tool not found");
 });
 
 const app = express();
-// 确保全局开启 JSON 解析
-app.use(express.json());
+// 注意：不要在全局使用 app.use(express.json())，这会干扰 SDK 读取流
 
-// 全局 transport 引用
 let currentTransport: SSEServerTransport | null = null;
 
 app.get("/sse", async (req, res) => {
-    console.log(">>> SSE: Attempting connection...");
-    
-    // 不要在这里手动写任何 res.writeHead 或 res.setHeader
-    // 官方 SDK 的 SSEServerTransport 构造函数会接管这个 res 并发送 headers
+    console.log(">>> SSE: Connection Start");
     currentTransport = new SSEServerTransport("/messages", res);
-    
-    try {
-        await server.connect(currentTransport);
-        console.log(">>> SSE: SDK connected successfully");
-    } catch (err) {
-        console.error(">>> SSE: Connection failed", err);
-    }
-
-    req.on("close", () => {
-        currentTransport = null;
-        console.log(">>> SSE: Connection closed");
-    });
+    await server.connect(currentTransport);
+    console.log(">>> SSE: SDK Connected");
 });
 
-app.post("/messages", async (req, res) => {
-    console.log(">>> POST: Received data from client");
-    
+// 在 POST 路由里精确控制解析
+app.post("/messages", express.json(), async (req, res) => {
+    console.log(">>> POST: Data Received");
     if (currentTransport) {
         try {
-            // 注意：handlePostMessage 内部会处理响应，不要手动发 res.send
-            await currentTransport.handlePostMessage(req, res);
+            // 关键：将解析后的 body 显式交给 SDK
+            await currentTransport.handlePostMessage(req, res, req.body);
+            console.log(">>> POST: Handled");
         } catch (err) {
-            console.error(">>> POST: Error handling message", err);
-            if (!res.headersSent) res.status(500).send("Internal Server Error");
+            console.error(">>> POST: Error", err);
+            if (!res.headersSent) res.status(500).send("Error");
         }
     } else {
-        console.error(">>> POST: No active session");
-        res.status(400).send("No active session");
+        res.status(400).send("No Session");
     }
 });
 
-app.get("/", (req, res) => res.send("Server status: OK"));
+app.get("/", (req, res) => res.send("OK"));
 
 const PORT = Number(process.env.PORT) || 10000;
 app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server is ready on port ${PORT}`);
+    console.log(`Ready on ${PORT}`);
 });

@@ -285,32 +285,41 @@ server.tool(
 async function main() {
   const app = express();
   
-  // 1. 健康检查
+  // 必须添加 JSON 解析中间件，否则 POST 消息无法处理
+  app.use(express.json());
+
   app.get("/", (req, res) => {
-    res.send("Sequential Thinking MCP Server (tmcp) is running!");
+    res.send("Sequential Thinking MCP Server is running!");
   });
 
-  // 2. SSE 链接端点
   app.get("/sse", async (req, res) => {
-    console.log("New SSE connection established");
-    
-    // 创建 SSE 传输层
+    console.log("New SSE connection attempt...");
+
+    // 1. 强制设置 SSE 响应头
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      // 下面这一行非常关键，防止 Render 缓存响应
+      'X-Accel-Buffering': 'no' 
+    });
+
+    // 2. 发送一个空注释作为心跳，防止连接被立即关闭
+    res.write(':ok\n\n');
+
     const transport = new SSEServerTransport("/messages", res);
     
-    // 【核心修改】：tmcp 的 McpServer 实例内部有一个 'server' 属性（官方 SDK 实例）
-    // 我们需要通过它来连接
     try {
-      // @ts-ignore - 绕过 tmcp 的私有属性检查
+      // @ts-ignore
       await server.server.connect(transport);
+      console.log("SSE connection fully established");
     } catch (err) {
-      console.error("Connection error:", err);
+      console.error("Connect error:", err);
+      res.end();
     }
   });
 
-  // 3. 消息传输端点
-  app.post("/messages", express.json(), async (req, res) => {
-    // 这里的逻辑也需要适配 tmcp 内部的 transport 映射
-    // 但为了简单且符合你的单用户场景，我们直接调用底层方法
+  app.post("/messages", async (req, res) => {
     try {
       // @ts-ignore
       const transport = server.server.transport as SSEServerTransport;
@@ -320,14 +329,15 @@ async function main() {
         res.status(400).send("No active transport");
       }
     } catch (err) {
+      console.error("Post message error:", err);
       res.status(500).send(String(err));
     }
   });
 
-  // 4. 监听端口
   const PORT = Number(process.env.PORT) || 10000;
+  // 3. 这里的 0.0.0.0 确保监听所有网卡
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`MCP server (tmcp) running on port ${PORT}`);
+    console.log(`MCP server running on port ${PORT}`);
   });
 }
 

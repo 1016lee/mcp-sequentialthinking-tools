@@ -8,28 +8,12 @@ import {
 import express from "express";
 import { SEQUENTIAL_THINKING_TOOL } from './schema.js';
 
-class SequentialThinkingServer {
-    public async processThought(args: any) {
-        console.error(`[Thinking] Step: ${args.thought_number}`);
-        return {
-            content: [{
-                type: 'text',
-                text: JSON.stringify({
-                    thought_number: args.thought_number,
-                    total_thoughts: args.total_thoughts,
-                    status: "processed"
-                }, null, 2)
-            }]
-        };
-    }
-}
-
-const thinkingLogic = new SequentialThinkingServer();
 const server = new Server(
     { name: "sequential-thinking-server", version: "0.0.4" },
     { capabilities: { tools: {} } }
 );
 
+// 逻辑处理
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [{
         name: "sequentialthinking_tools",
@@ -49,58 +33,43 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (request.params.name === "sequentialthinking_tools") {
-        return await thinkingLogic.processThought(request.params.arguments);
+        const args = request.params.arguments as any;
+        return {
+            content: [{
+                type: 'text',
+                text: `Processed thought #${args.thought_number}`
+            }]
+        };
     }
-    throw new Error(`Tool not found: ${request.params.name}`);
+    throw new Error("Tool not found");
 });
 
 const app = express();
 
-// 存储所有活跃的 transport 会话
-const activeTransports = new Map<string, SSEServerTransport>();
-
-app.get("/", (req, res) => res.send("MCP Server is Live!"));
+// 官方推荐写法：统一管理 transport
+let transport: SSEServerTransport | null = null;
 
 app.get("/sse", async (req, res) => {
-    console.log("New SSE Connection");
-    const transport = new SSEServerTransport("/messages", res);
-    
-    // 使用 SDK 内部生成的 sessionId 或自定义一个来追踪
-    // 这里我们简单处理，确保在连接建立后将其存入 Map
+    // 每次新连接都创建一个新的 transport 实例
+    transport = new SSEServerTransport("/messages", res);
+    console.log("New SSE session initiated");
     await server.connect(transport);
-
-    // 关键修复：监听 transport 的 sessionId
-    const sessionId = (transport as any).sessionId;
-    if (sessionId) {
-        activeTransports.set(sessionId, transport);
-        console.log(`Transport registered: ${sessionId}`);
-    }
-
-    req.on('close', () => {
-        if (sessionId) activeTransports.delete(sessionId);
-        console.log("Connection closed");
-    });
 });
 
-app.post("/messages", express.json(), async (req, res) => {
-    // 获取会话 ID，SDK 默认通过查询参数 sessionId 传递
-    const sessionId = req.query.sessionId as string;
-    const transport = activeTransports.get(sessionId);
-
+app.post("/messages", async (req, res) => {
     if (transport) {
-        await transport.handlePostMessage(req, res);
+        // 使用 express.json() 的快捷方式
+        express.json()(req, res, async () => {
+            await transport!.handlePostMessage(req, res);
+        });
     } else {
-        // 如果没有 sessionId，尝试使用最近的一个（兼容某些客户端）
-        const fallbackTransport = Array.from(activeTransports.values()).pop();
-        if (fallbackTransport) {
-            await fallbackTransport.handlePostMessage(req, res);
-        } else {
-            res.status(400).send("No active session");
-        }
+        res.status(400).send("No active session");
     }
 });
+
+app.get("/", (req, res) => res.send("MCP Server Ready"));
 
 const PORT = Number(process.env.PORT) || 10000;
 app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server ready on port ${PORT}`);
+    console.log(`Server running on port ${PORT}`);
 });

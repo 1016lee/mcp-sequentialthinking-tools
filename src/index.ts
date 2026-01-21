@@ -284,8 +284,7 @@ server.tool(
 
 async function main() {
   const app = express();
-  
-  // 必须添加 JSON 解析中间件，否则 POST 消息无法处理
+  // 必须：用于解析客户端发来的 JSON 消息
   app.use(express.json());
 
   app.get("/", (req, res) => {
@@ -295,49 +294,54 @@ async function main() {
   app.get("/sse", async (req, res) => {
     console.log("New SSE connection attempt...");
 
-    // 1. 强制设置 SSE 响应头
+    // 1. 设置标准 SSE 响应头
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive',
-      // 下面这一行非常关键，防止 Render 缓存响应
-      'X-Accel-Buffering': 'no' 
+      'X-Accel-Buffering': 'no'
     });
 
-    // 2. 发送一个空注释作为心跳，防止连接被立即关闭
-    res.write(':ok\n\n');
-
+    // 2. 建立传输层
     const transport = new SSEServerTransport("/messages", res);
     
+    // 3. 将底层服务器与传输层连接
     try {
-      // @ts-ignore
+      // @ts-ignore - tmcp 内部结构适配
       await server.server.connect(transport);
-      console.log("SSE connection fully established");
+      console.log("SSE Transport connected to MCP server");
     } catch (err) {
-      console.error("Connect error:", err);
-      res.end();
+      console.error("MCP Connect error:", err);
+      if (!res.writableEnded) res.end();
     }
+
+    // 4. 监听连接关闭，及时清理
+    req.on('close', () => {
+      console.log("Client closed SSE connection");
+    });
   });
 
   app.post("/messages", async (req, res) => {
     try {
-      // @ts-ignore
+      // @ts-ignore - 从 tmcp 底层获取当前活跃的传输层
       const transport = server.server.transport as SSEServerTransport;
+      
       if (transport) {
+        // 直接处理 POST 消息
         await transport.handlePostMessage(req, res);
       } else {
-        res.status(400).send("No active transport");
+        console.error("Post received but no active SSE transport found");
+        res.status(400).json({ error: "No active SSE session" });
       }
     } catch (err) {
-      console.error("Post message error:", err);
+      console.error("Message handling error:", err);
       res.status(500).send(String(err));
     }
   });
 
   const PORT = Number(process.env.PORT) || 10000;
-  // 3. 这里的 0.0.0.0 确保监听所有网卡
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`MCP server running on port ${PORT}`);
+    console.log(`MCP server (tmcp) ready on port ${PORT}`);
   });
 }
 

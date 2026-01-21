@@ -283,43 +283,58 @@ server.tool(
 );
 
 async function main() {
-  // 注意：原始代码中已经创建了一个名为 'server' 的实例
-  // 我们直接使用它，不要尝试 new 一个不存在的类
-  
   const app = express();
-  let transport: SSEServerTransport | null = null;
-
-  // 1. 根路径：用于 Render 健康检查
+  
+  // 1. 健康检查
   app.get("/", (req, res) => {
-    res.send("Sequential Thinking MCP Server is running!");
+    res.send("Sequential Thinking MCP Server (tmcp) is running!");
   });
 
   // 2. SSE 链接端点
   app.get("/sse", async (req, res) => {
     console.log("New SSE connection established");
-    // 这里的 server 是原始代码顶层定义的那个 server 变量
-    transport = new SSEServerTransport("/messages", res);
-    await server.connect(transport); 
-  });
-
-  // 3. 消息传输端点
-  app.post("/messages", async (req, res) => {
-    if (transport) {
-      await transport.handlePostMessage(req, res);
-    } else {
-      res.status(400).send("No active SSE transport");
+    
+    // 创建 SSE 传输层
+    const transport = new SSEServerTransport("/messages", res);
+    
+    // 【核心修改】：tmcp 的 McpServer 实例内部有一个 'server' 属性（官方 SDK 实例）
+    // 我们需要通过它来连接
+    try {
+      // @ts-ignore - 绕过 tmcp 的私有属性检查
+      await server.server.connect(transport);
+    } catch (err) {
+      console.error("Connection error:", err);
     }
   });
 
-  // 4. 监听端口 (修复了类型转换错误)
+  // 3. 消息传输端点
+  app.post("/messages", express.json(), async (req, res) => {
+    // 这里的逻辑也需要适配 tmcp 内部的 transport 映射
+    // 但为了简单且符合你的单用户场景，我们直接调用底层方法
+    try {
+      // @ts-ignore
+      const transport = server.server.transport as SSEServerTransport;
+      if (transport) {
+        await transport.handlePostMessage(req, res);
+      } else {
+        res.status(400).send("No active transport");
+      }
+    } catch (err) {
+      res.status(500).send(String(err));
+    }
+  });
+
+  // 4. 监听端口
   const PORT = Number(process.env.PORT) || 10000;
-  
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`MCP server running on port ${PORT}`);
+    console.log(`MCP server (tmcp) running on port ${PORT}`);
   });
 }
 
+// 确保 main 被执行
 main().catch((error) => {
-	console.error('Fatal error running server:', error);
-	process.exit(1);
+  console.error('Fatal error running server:', error);
+  process.exit(1);
 });
+
+

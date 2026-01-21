@@ -282,34 +282,37 @@ server.tool(
 	},
 );
 
-async function main() {  
-	const server = new SequentialThinkingServer();
+async function main() {
+  const server = new SequentialThinkingServer();
+  const app = express();
+  let transport: SSEServerTransport | null = null;
 
-// 创建 Express 应用
-const app = express();
-let transport: SSEServerTransport | null = null;
+  // 1. 根路径：用于 Render 健康检查和快速测试
+  app.get("/", (req, res) => {
+    res.send("MCP Server is running!");
+  });
 
-// 1. 创建 SSE 链接端点
-app.get("/sse", async (req, res) => {
-  console.log("New SSE connection established");
-  transport = new SSEServerTransport("/messages", res);
-  await server.server.connect(transport);
-});
+  // 2. SSE 链接端点
+  app.get("/sse", async (req, res) => {
+    console.log("New SSE connection established");
+    transport = new SSEServerTransport("/messages", res);
+    await server.server.connect(transport);
+  });
 
-// 2. 处理消息传输端点
-app.post("/messages", async (req, res) => {
-  if (transport) {
-    await transport.handlePostMessage(req, res);
-  } else {
-    res.status(400).send("No active SSE transport");
-  }
-});
+  // 3. 消息传输端点
+  app.post("/messages", async (req, res) => {
+    if (transport) {
+      await transport.handlePostMessage(req, res);
+    } else {
+      res.status(400).send("No active SSE transport");
+    }
+  });
 
-// 3. 监听 Render 提供的端口
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
-  console.log(`Sequential Thinking MCP server running on port ${PORT}`);
-});
+  // 4. 最后启动监听
+  const PORT = process.env.PORT || 10000;
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Sequential Thinking MCP server running on port ${PORT}`);
+  });
 }
 
 main().catch((error) => {

@@ -54,6 +54,8 @@
 	"dependencies": {
 		"@tmcp/adapter-valibot": "^0.1.5",
 		"@tmcp/transport-stdio": "^0.4.1",
+		"express": "^4.x.x",
+		"@types/express": "^4.x.x",
 		"chalk": "^5.6.2",
 		"tmcp": "^1.19.0",
 		"valibot": "^1.2.0"

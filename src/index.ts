@@ -88,14 +88,7 @@ app.get("/", (req, res) => {
 app.get("/sse", async (req, res) => {
     console.log("Kelivo: New SSE connection attempt");
 
-    // 针对 Render 和移动端优化的 Header
-    res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-        'X-Accel-Buffering': 'no'
-    });
-
+    // 注意：已移除 res.writeHead，完全交给 SSEServerTransport 处理以避免 ERR_HTTP_HEADERS_SENT
     transport = new SSEServerTransport("/messages", res);
     
     try {
@@ -103,7 +96,10 @@ app.get("/sse", async (req, res) => {
         console.log("Kelivo: SSE connected and MCP initialized");
     } catch (err) {
         console.error("MCP Connection Error:", err);
-        res.end();
+        // 如果 SDK 还没发过 Header，则尝试返回错误
+        if (!res.headersSent) {
+            res.status(500).send("Internal Server Error");
+        }
     }
 });
 
@@ -118,7 +114,7 @@ app.post("/messages", express.json(), async (req, res) => {
     }
 });
 
-// 监听端口
+// 监听端口 (使用 Number 转换确保类型正确)
 const PORT = Number(process.env.PORT) || 10000;
 app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server is running on port ${PORT}`);

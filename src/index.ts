@@ -10,7 +10,7 @@ const server = new Server(
     { capabilities: { tools: {} } }
 );
 
-// 核心逻辑
+// 工具注册
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [{
         name: "sequentialthinking_tools",
@@ -30,69 +30,58 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (request.params.name === "sequentialthinking_tools") {
-        return { content: [{ type: 'text', text: "Tool logic running..." }] };
+        return { content: [{ type: 'text', text: "Processing completed" }] };
     }
     throw new Error("Tool not found");
 });
 
 const app = express();
+// 确保全局开启 JSON 解析
 app.use(express.json());
 
-// 关键改动：使用一个极简的全局变量存储当前的 transport
+// 全局 transport 引用
 let currentTransport: SSEServerTransport | null = null;
 
 app.get("/sse", async (req, res) => {
-    console.log(">>> SSE: New connection request from Kelivo");
+    console.log(">>> SSE: Attempting connection...");
     
-    // 1. 设置极度显式的 Header
-    res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache, no-transform',
-        'Connection': 'keep-alive',
-        'X-Accel-Buffering': 'no'
-    });
-
-    // 2. 这里的路径必须是绝对路径或简单的相对路径
-    // 我们强制使用 "/messages" 并在下方 POST 中匹配
+    // 不要在这里手动写任何 res.writeHead 或 res.setHeader
+    // 官方 SDK 的 SSEServerTransport 构造函数会接管这个 res 并发送 headers
     currentTransport = new SSEServerTransport("/messages", res);
     
-    // 3. 立即连接
-    await server.connect(currentTransport);
-    console.log(">>> SSE: Server connected to transport");
-
-    // 4. 保持连接存活的心跳，防止 Render 断开
-    const keepAlive = setInterval(() => {
-        res.write(': keep-alive\n\n');
-    }, 20000);
+    try {
+        await server.connect(currentTransport);
+        console.log(">>> SSE: SDK connected successfully");
+    } catch (err) {
+        console.error(">>> SSE: Connection failed", err);
+    }
 
     req.on("close", () => {
-        clearInterval(keepAlive);
         currentTransport = null;
         console.log(">>> SSE: Connection closed");
     });
 });
 
 app.post("/messages", async (req, res) => {
-    console.log(">>> POST: Received message from Kelivo");
+    console.log(">>> POST: Received data from client");
     
     if (currentTransport) {
         try {
-            // 这里是报错的地方，我们增加一个状态检查
+            // 注意：handlePostMessage 内部会处理响应，不要手动发 res.send
             await currentTransport.handlePostMessage(req, res);
-            console.log(">>> POST: Message handled successfully");
         } catch (err) {
-            console.error(">>> POST: SDK failed to handle message:", err);
-            res.status(500).send(String(err));
+            console.error(">>> POST: Error handling message", err);
+            if (!res.headersSent) res.status(500).send("Internal Server Error");
         }
     } else {
-        console.error(">>> POST: No active transport session found");
+        console.error(">>> POST: No active session");
         res.status(400).send("No active session");
     }
 });
 
-app.get("/", (req, res) => res.send("MCP Server is Running"));
+app.get("/", (req, res) => res.send("Server status: OK"));
 
 const PORT = Number(process.env.PORT) || 10000;
 app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server listening on port ${PORT}`);
+    console.log(`Server is ready on port ${PORT}`);
 });

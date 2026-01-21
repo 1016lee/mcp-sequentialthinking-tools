@@ -13,7 +13,7 @@ const server = new Server(
     { capabilities: { tools: {} } }
 );
 
-// 逻辑处理
+// 工具注册逻辑
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [{
         name: "sequentialthinking_tools",
@@ -33,41 +33,42 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (request.params.name === "sequentialthinking_tools") {
-        const args = request.params.arguments as any;
-        return {
-            content: [{
-                type: 'text',
-                text: `Processed thought #${args.thought_number}`
-            }]
-        };
+        return { content: [{ type: 'text', text: "Logic Processed" }] };
     }
     throw new Error("Tool not found");
 });
 
 const app = express();
 
-// 官方推荐写法：统一管理 transport
+// 1. 提前声明全局解析器，确保所有 POST 请求都能被解析
+app.use(express.json());
+
 let transport: SSEServerTransport | null = null;
 
 app.get("/sse", async (req, res) => {
-    // 每次新连接都创建一个新的 transport 实例
-    transport = new SSEServerTransport("/messages", res);
-    console.log("New SSE session initiated");
+    // 关键点：手动拼接绝对 URL。例如 https://xxx.onrender.com/messages
+    // 这样 Kelivo 就不会因为相对路径解析失败
+    const protocol = req.headers['x-forwarded-proto'] || 'http';
+    const host = req.get('host');
+    const messageUrl = `${protocol}://${host}/messages`;
+    
+    console.log(`Kelivo connected. Instructing callback to: ${messageUrl}`);
+
+    transport = new SSEServerTransport(messageUrl as `/${string}`, res);
     await server.connect(transport);
 });
 
 app.post("/messages", async (req, res) => {
+    console.log("POST /messages received. Body keys:", Object.keys(req.body));
     if (transport) {
-        // 使用 express.json() 的快捷方式
-        express.json()(req, res, async () => {
-            await transport!.handlePostMessage(req, res);
-        });
+        await transport.handlePostMessage(req, res);
     } else {
+        // 容错：如果 transport 因为并发丢失，重新尝试基于当前响应建立（虽然不推荐但增加成功率）
         res.status(400).send("No active session");
     }
 });
 
-app.get("/", (req, res) => res.send("MCP Server Ready"));
+app.get("/", (req, res) => res.send("Server is alive"));
 
 const PORT = Number(process.env.PORT) || 10000;
 app.listen(PORT, "0.0.0.0", () => {

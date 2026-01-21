@@ -46,16 +46,27 @@ app.use(express.json());
 let transport: SSEServerTransport | null = null;
 
 app.get("/sse", async (req, res) => {
-    // 关键点：手动拼接绝对 URL。例如 https://xxx.onrender.com/messages
-    // 这样 Kelivo 就不会因为相对路径解析失败
+    // 1. 强制禁用所有可能的缓存
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-transform, no-cache, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no'); // 关键：禁用 Nginx/Render 缓冲
+
     const protocol = req.headers['x-forwarded-proto'] || 'http';
     const host = req.get('host');
     const messageUrl = `${protocol}://${host}/messages`;
     
-    console.log(`Kelivo connected. Instructing callback to: ${messageUrl}`);
+    console.log(`Kelivo connected. Callback: ${messageUrl}`);
 
     transport = new SSEServerTransport(messageUrl as `/${string}`, res);
+    
+    // 2. 这里的 connect 会发送握手消息，我们需要确保它立即发出
     await server.connect(transport);
+    
+    // 3. 某些环境下需要手动发送一个空行或注释来激活流
+    res.write(':ok\n\n'); 
 });
 
 app.post("/messages", async (req, res) => {

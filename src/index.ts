@@ -284,7 +284,8 @@ server.tool(
 
 async function main() {
   const app = express();
-  // 必须：用于解析客户端发来的 JSON 消息
+  
+  // 关键：Kelivo 的 POST 请求需要这个解析器
   app.use(express.json());
 
   app.get("/", (req, res) => {
@@ -292,9 +293,9 @@ async function main() {
   });
 
   app.get("/sse", async (req, res) => {
-    console.log("New SSE connection attempt...");
+    console.log("Kelivo attempting SSE connection...");
 
-    // 1. 设置标准 SSE 响应头
+    // 1. 设置标准的响应头
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
@@ -302,46 +303,39 @@ async function main() {
       'X-Accel-Buffering': 'no'
     });
 
-    // 2. 建立传输层
+    // 2. 创建传输层。注意：这里我们明确指定 endpoint 路径
     const transport = new SSEServerTransport("/messages", res);
     
-    // 3. 将底层服务器与传输层连接
     try {
-      // @ts-ignore - tmcp 内部结构适配
+      // @ts-ignore - 连接到底层 McpServer
       await server.server.connect(transport);
-      console.log("SSE Transport connected to MCP server");
+      console.log("SSE Transport bound to MCP server");
     } catch (err) {
-      console.error("MCP Connect error:", err);
-      if (!res.writableEnded) res.end();
+      console.error("Connection error:", err);
+      res.end();
     }
-
-    // 4. 监听连接关闭，及时清理
-    req.on('close', () => {
-      console.log("Client closed SSE connection");
-    });
   });
 
   app.post("/messages", async (req, res) => {
+    console.log("Received POST message from Kelivo");
     try {
-      // @ts-ignore - 从 tmcp 底层获取当前活跃的传输层
+      // @ts-ignore - 获取当前活跃的 transport
       const transport = server.server.transport as SSEServerTransport;
-      
       if (transport) {
-        // 直接处理 POST 消息
         await transport.handlePostMessage(req, res);
       } else {
-        console.error("Post received but no active SSE transport found");
-        res.status(400).json({ error: "No active SSE session" });
+        console.error("POST received but no active transport found");
+        res.status(400).send("No active session");
       }
     } catch (err) {
-      console.error("Message handling error:", err);
+      console.error("POST handling error:", err);
       res.status(500).send(String(err));
     }
   });
 
   const PORT = Number(process.env.PORT) || 10000;
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`MCP server (tmcp) ready on port ${PORT}`);
+    console.log(`Server ready for Kelivo on port ${PORT}`);
   });
 }
 
